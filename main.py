@@ -1,118 +1,134 @@
 import pygame
 import random
 import math
-import time
+import numpy
+from PIL import Image
+
+# Load Image
+IMAGEPATH = "main.png"
+IMAGE = Image.open(IMAGEPATH)
+
+# Pygame Constants
+SCREEN_WIDTH, SCREEN_HEIGHT = IMAGE.size
 
 # Initialize pygame
 pygame.init()
+bg = pygame.image.load(IMAGEPATH)
 
-# Constants
-SCREEN_WIDTH = 800
-SCREEN_HEIGHT = 600
+# View constants
+UPDATES_RATE = 20 # Updates the screen every UPDATES_RATE generations
+SHOW_FITNESS = True # Whether to view the fitness of the entities
+
+# Genetic algorithm constants
+POPULATION_SIZE = 50
+ORG_MUTATION_CHANCE = 0.1
+MUTATION_CHANCE = ORG_MUTATION_CHANCE
+ORG_MAX_STEPS = 7000
+MAX_STEPS = ORG_MAX_STEPS
+STEP_SIZE = 10
+# MAX_GENERATIONS = 100
+
+# Fitness constants
+DISTANCE_PENALTY = 0.5
 
 # Create the screen
 screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
 
+# Labyrinth Bounding-boxes
+bounding_boxes = []
+
 # Title and icon
 pygame.display.set_caption("Maze Solver")
 
-last_time = time.time()
-deltatime = 0
-time_since_last_generation = 0
+def get_maxsteps():
+    return MAX_STEPS
+
+def mutate(steps):
+    mutated_steps = []
+    for step in steps:
+        _step = [step[0], step[1]]
+        if random.randrange(100) < MUTATION_CHANCE*100:
+            _step[0] = step[0]*random.randint(-1, 1)
+            _step[1] = step[1]*random.randint(-1, 1)
+        mutated_steps.append(_step)
+    return mutated_steps
 
 class Labyrinth:
-    def draw(self):
-        # Line on the top
-        pygame.draw.line(screen, (0, 0, 0), (10, 10), (SCREEN_WIDTH - 10, 10), 20)
-        # Line on the bottom
-        pygame.draw.line(screen, (0, 0, 0), (10, SCREEN_HEIGHT - 10), (SCREEN_WIDTH - 10, SCREEN_HEIGHT - 10), 20)
-        # Line on the left
-        pygame.draw.line(screen, (0, 0, 0), (10, 10), (10, SCREEN_HEIGHT - 10), 20)
-        # Line on the right
-        pygame.draw.line(screen, (0, 0, 0), (SCREEN_WIDTH - 10, 10), (SCREEN_WIDTH - 10, SCREEN_HEIGHT - 10), 20)
-        # Vertical line in the middle
-        pygame.draw.line(screen, (0, 0, 0), (SCREEN_WIDTH / 2, 100), (SCREEN_WIDTH / 2, SCREEN_HEIGHT - 10), 20)
-        # Goal on the bottom right
-        pygame.draw.rect(screen, (0, 255, 0), (SCREEN_WIDTH - 60, SCREEN_HEIGHT - 60, 19, 19))
+    entity_x = SCREEN_WIDTH/4
+    entity_y = SCREEN_HEIGHT - SCREEN_HEIGHT/4
 
-    def willCollide(self, x, y, dx, dy):
-        if x + dx < 0 or x + dx > SCREEN_WIDTH - 20 or y + dy < 0 or y + dy > SCREEN_HEIGHT - 20 or (
-                x + dx > SCREEN_WIDTH / 2 - 20 and y + dy > 100 and x + dx < SCREEN_WIDTH / 2 + 20):
+    walls = []
+
+    @staticmethod
+    def will_collide(x, y, dx, dy):
+        if x + dx < 0 or \
+                x + dx > SCREEN_WIDTH - 20 or \
+                y + dy < 0 or \
+                y + dy > SCREEN_HEIGHT - 20:
             return True
         else:
-            return False
+            if IMAGE.getpixel((x+dx, y+dy)) == (0, 0, 0):
+                return True
+            else:
+                return False
 
 # The entity class
 class Entity:
-    def __init__(self, x, y, color, fitness=0, active=True, steps=None, wall_touches=None):
-        if wall_touches is None:
-            wall_touches = []
-        if steps is None:
-            steps = []
-        else:
-            for step in steps:
-                x += step[0]
-                y += step[1]
-
+    def __init__(self, x, y, color, fitness=0, steps=None, wall_touches=None, steps_instructions=None):
+        if steps is None: steps = []
+        if wall_touches is None: wall_touches = []
         self.x = x
         self.y = y
         self.color = color
         self.fitness = fitness
-        self.active = active
         self.steps = steps
         self.wall_touches = wall_touches
+        self.steps_instructions = steps_instructions
 
     def draw(self):
         pygame.draw.rect(screen, self.color, (self.x, self.y, 19, 19))
 
-    def calculateFitness(self):
-        STEPCOST = 0.1
-        DISTANCECOST = 0.2
-        WALLCOST = 0.4
+    def get_distance_to_goal(self, x=None, y=None):
+        if x is None: x = self.x
+        if y is None: y = self.y
 
-        distanceToGoal = math.sqrt((SCREEN_WIDTH - 60 - self.x) ** 2 + (SCREEN_HEIGHT - 60 - self.y) ** 2)
+        distance = math.sqrt((SCREEN_WIDTH - 60 - x) ** 2 + (SCREEN_HEIGHT - 60 - y) ** 2) + 0.01  # Pythagorean Theorem + 0.01 to counter divide by 0 error
+        return distance
 
-        # Get the distance to the goal when the entity touched a wall
-        for touch in self.wall_touches:
-            self.fitness += math.sqrt((SCREEN_WIDTH - 60 - (self.x + touch[0])) ** 2 + (SCREEN_HEIGHT - 60 - (self.y + touch[1])) ** 2)
+    def calculate_absolute_fitness(self):
+        self.fitness = DISTANCE_PENALTY * 1/self.get_distance_to_goal()
 
-        print(self.fitness)
+        # The percentage of its fitness it looses
+        percent = 0
+        for wall_touch in self.wall_touches:
+            percent += numpy.clip(1000 / (self.get_distance_to_goal(wall_touch[0], wall_touch[1]) + 100), 1, 10) / (MAX_STEPS/1000)
+
+        self.fitness -= self.fitness * percent / 100
+
+    def get_relative_fitness(self):
+        return numpy.clip(self.fitness / max(entity.fitness for entity in entities), 0, 1)
 
     def move(self, dx, dy):
-        if self.active:
-            # Check if the entity is not going out to the wall
-            labyrinth = Labyrinth()
-            if not labyrinth.willCollide(self.x, self.y, dx, dy):
-                self.x += dx
-                self.y += dy
-                self.steps.append((dx, dy))
-            else:
-                self.wall_touches.append((dx, dy))
-                print(len(self.wall_touches))
+        # Check if the entity is not going out to the wall
+        labyrinth = Labyrinth()
+        if not labyrinth.will_collide(self.x, self.y, dx, dy):
+            self.x += dx
+            self.y += dy
         else:
-            self.calculateFitness()
+            self.wall_touches.append((self.x, self.y))
 
-def updateScreen(entities):
-    global deltatime
-    global last_time
-    global time_since_last_generation
+        self.steps.append((dx, dy))
 
-    deltatime = time.time() - last_time
-    last_time = time.time()
-    time_since_last_generation += deltatime
 
-    screen.fill((255, 255, 255))
-
-    # Draw the labyrinth
-    labyrinth = Labyrinth()
-    labyrinth.draw()
+def update_screen(_entities):
+    screen.blit(bg, (0, 0))
 
     # Place the entities
-    for entity in entities:
+    for entity in _entities:
         entity.draw()
 
     # Set colors for entities based on their active state
-    for entity in entities:
+    for entity in _entities:
         if entity.fitness >= 0:
             entity.color = (0, entity.fitness / 100000, 0)
         else:
@@ -122,31 +138,73 @@ def updateScreen(entities):
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
             pygame.quit()
-            quit()
+            # quit()
 
     # Update the screen
     pygame.display.flip()
 
+
+
 entities = []
 
 # Create the entities on the bottom left
-for i in range(100):
-    entities.append(Entity(SCREEN_WIDTH/4, SCREEN_HEIGHT-SCREEN_HEIGHT/4, (0, 0, 0)))
+for i in range(POPULATION_SIZE):
+    entities.append(Entity(Labyrinth.entity_x, Labyrinth.entity_y, (0, 0, 0)))
 
 def main():
-    global time_since_last_generation
+    global MAX_STEPS
+    global MUTATION_CHANCE
+
+    generation = 0
+    best_entity = entities[0]
 
     while True:
-        while time_since_last_generation < 3:
-            updateScreen(entities)
+        touched_goal = False
 
-            # Move every entity randomly
+        while not touched_goal and len(entities[0].steps) < MAX_STEPS:
+            # Move every entity according to its steps made and instructions
             for entity in entities:
-                xMove = random.choice([-1, 1])
-                yMove = random.choice([-1, 1])
+                if generation == 0:
+                    entity.move(random.randint(-1, 1) * STEP_SIZE, random.randint(-1, 1) * STEP_SIZE)
+                else:
+                    # The next step which is to be made
+                    next_step = entity.steps_instructions[len(entity.steps)]
+                    entity.move(next_step[0], next_step[1])
 
-                entity.move(xMove * 5, yMove * 5)
+                    # If at wall
+                    if entity.get_distance_to_goal() < 10:
+                        touched_goal = True
+                        MAX_STEPS = len(entity.steps)
+                        MUTATION_CHANCE = ORG_MUTATION_CHANCE*(MAX_STEPS/ORG_MAX_STEPS)
+            if generation % UPDATES_RATE == 0:
+                update_screen(entities)
 
 
-if __name__ == "__main__":
+        for entity in entities:
+            entity.calculate_absolute_fitness()
+        for entity in entities:
+            entity.color = (255*entity.get_relative_fitness(), 0, 0)
+            if entity.get_relative_fitness() == 1:
+                entity.color = (0, 255, 0)
+                best_entity = entity
+
+        if generation % UPDATES_RATE == 0 and SHOW_FITNESS:
+            update_screen(entities)
+
+        # Create a new generation
+        entities.clear()
+
+        # Create the entities with the steps of the best entity
+        entities.append(Entity(Labyrinth.entity_x, Labyrinth.entity_y, (0, 0, 0), steps_instructions=best_entity.steps))
+        for _ in range(POPULATION_SIZE-1):
+            mutation = mutate(best_entity.steps)
+            entities.append(Entity(Labyrinth.entity_x, Labyrinth.entity_y, (0, 0, 0), steps_instructions=mutation))
+
+        generation += 1
+
+        # print (generation, best_entity.fitness)
+
+        print(MAX_STEPS, MUTATION_CHANCE)
+
+if __name__ == "__main__":\
     main()
