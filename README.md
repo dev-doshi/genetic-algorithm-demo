@@ -44,9 +44,9 @@ To get started with this program, follow these steps:
 
 ## Dependencies
 
-- **Pygame:** Version X.X.X
-- **NumPy:** Version X.X.X
-- **Pillow:** Version X.X.X
+- **Pygame:** 
+- **NumPy:** 
+- **Pillow:** 
 
 Make sure to have these dependencies installed before running the script.
 
